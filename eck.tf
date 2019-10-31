@@ -1,19 +1,102 @@
-module "ec2_cluster" {
-  source                 = "terraform-aws-modules/ec2-instance/aws"
-  version                = "~> 2.0"
+provider "aws" {
+  region = "us-east-1"
+}
 
-  name                   = "first_instance"
-  instance_count         = 1
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 1.26.0"
 
-  ami                    = "ami-01a9d7c9540fa86b3"
-  instance_type          = "t2.micro"
-  key_name               = "devkack"
-  monitoring             = false
-  vpc_security_group_ids = ["sg-0196f9c4fecfa9965"]
-  subnet_id              = "subnet-05361cd0813d38e48"
+  name               = "devhack"
+  cidr               = "10.10.10.0/16"
+  azs                = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  private_subnets    = ["10.10.10.0/27", "10.10.11.32/27", "10.10.12.64/27"]
+  public_subnets     = ["10.10.10.96/27", "10.10.10.128/27", "10.10.10.160/27"]
+  enable_nat_gateway = true
+  single_nat_gateway = true
 
   tags = {
-    Terraform   = "true"
-    Environment = "dev"
+    Owner       = "devhack"
+    Environment = "hackathon"
   }
 }
+
+module "ecs_cluster" {
+  source = "anrim/ecs/aws//modules/cluster"
+
+  name        = "ecs-alb-single-svc"
+  vpc_id      = "${module.vpc.vpc_id}"
+  vpc_subnets = ["${module.vpc.private_subnets}"]
+
+  tags = {
+    Owner       = "devhack"
+    Environment = "hackathon"
+  }
+}
+
+module "alb" {
+  source = "anrim/ecs/aws//modules/alb"
+
+  name                     = "ecs-alb-single-svc"
+  host_name                = "app"
+  domain_name              = "example.com"
+###certificate_arn          = "arn:aws:iam::123456789012:server-certificate/test_cert-123456789012"
+  backend_sg_id            = "${module.ecs_cluster.instance_sg_id}"
+  create_log_bucket        = true
+  enable_logging           = true
+  force_destroy_log_bucket = true
+  log_bucket_name          = "ecs-alb-single-svc-logs"
+
+  tags = {
+    Owner       = "devhack"
+    Environment = "hackathon"
+  }
+
+  vpc_id      = "${module.vpc.vpc_id}"
+  vpc_subnets = ["${module.vpc.public_subnets}"]
+}
+
+resource "aws_ecs_task_definition" "app" {
+  family = "ecs-alb-single-svc"
+
+  container_definitions = <<EOF
+[
+  {
+    "name": "devhackec2img",
+    "image": "ami-0dac137addabebfb3",
+    "essential": true,
+    "portMappings": [
+      {
+        "containerPort": 80
+      }
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "ecs-alb-single-svc-nginx",
+        "awslogs-region": "us-east-1"
+      }
+    },
+    "memory": 64
+    "cpu": 50
+  }
+]
+EOF
+}
+
+module "ecs_service_app" {
+  source = "anrim/ecs/aws//modules/service"
+
+  name                 = "ecs-alb-single-svc"
+  alb_target_group_arn = "${module.alb.target_group_arn}"
+  cluster              = "${module.ecs_cluster.cluster_id}"
+  container_name       = "nginx"
+  container_port       = "80"
+  log_groups           = ["ecs-alb-single-svc-nginx"]
+  task_definition_arn  = "${aws_ecs_task_definition.app.arn}"
+
+  tags = {
+    Owner       = "user"
+    Environment = "me"
+  }
+}
+
