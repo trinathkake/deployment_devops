@@ -1,4 +1,11 @@
 provider "aws" {
+ if existing.Alias == "" {
+            diags = append(diags, &hcl.Diagnostic{
+                Severity: hcl.DiagError,
+                Summary:  "Duplicate provider configuration",
+                Detail:   fmt.Sprintf("A default (non-aliased) provider configuration for %q was already given at %s. If multiple configurations are required, set the \"alias\" argument for alternative configurations.", existing.Name, existing.DeclRange),
+                Subject:  &pc.DeclRange,
+            })
   region = "us-east-1"
 }
 
